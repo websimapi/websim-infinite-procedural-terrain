@@ -190,7 +190,7 @@ class ChunkManager {
     const vertexCount = pos.count;
     // We'll build a height grid, smooth it (two-pass blur) for softer transitions, then assign colors.
     const resolution = SEGMENTS + 1;
-    const heights = new Float32(vertexCount); // temp typed array
+    const heights = new Float32Array(vertexCount); // temp typed array
     // populate heights
     for(let i=0;i<vertexCount;i++){
       const vx = pos.getX(i) + cx*CHUNK_SIZE;
@@ -198,7 +198,7 @@ class ChunkManager {
       heights[i] = sampleTerrain(vx, vz);
     }
     // two-pass smoothing kernel (box blur) across the grid to soften harsh vertex jumps
-    const smoothed = new Float32(vertexCount);
+    const smoothed = new Float32Array(vertexCount);
     const getIndex = (gx,gz) => gz * resolution + gx;
     for(let pass=0; pass<2; pass++){
       for(let gz=0; gz<resolution; gz++){

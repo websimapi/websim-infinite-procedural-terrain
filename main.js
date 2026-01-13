@@ -386,48 +386,77 @@ function toggleMap(){
   if(mapVisible) drawMap();
 }
 function drawMap(){
-  // Top-down map: more zoomed in and per-pixel line-of-sight (LOS) visibility + distance fog.
+  // Top-down HD map optimized for mobile: use devicePixelRatio, cache height grid, and reduce LOS steps.
   mapCanvas.width = window.innerWidth;
   mapCanvas.height = window.innerHeight;
   const ctx = mapCanvas.getContext('2d');
 
   const player = playerSphere.position;
-  const pcx = Math.floor(player.x / CHUNK_SIZE);
-  const pcz = Math.floor(player.z / CHUNK_SIZE);
 
-  // zoom in: show fewer chunks but more detail
-  const RANGE = 4; // chunks radius shown (smaller => zoomed in)
+  const RANGE = 4; // chunks radius shown
   const worldHalf = (RANGE + 0.5) * CHUNK_SIZE;
   const worldMinX = player.x - worldHalf;
   const worldMinZ = player.z - worldHalf;
   const worldSize = worldHalf * 2;
 
-  // higher-resolution map for a zoomed-in view (bounded for perf)
-  const MAP_PIX = Math.min(600, Math.floor(Math.min(mapCanvas.width, mapCanvas.height)));
+  // use DPR to produce crisper map on HD screens but cap for perf
+  // adaptive DPR with mobile-aware caps for performance
+  const DPR = Math.min(2.5, Math.max(1, window.devicePixelRatio || 1));
+  // baseSize relative to viewport but keep map render area modest for mobile
+  const baseSize = Math.min(mapCanvas.width, mapCanvas.height) * 0.62;
+  // allow higher internal resolution for sharper maps on modern devices but cap to preserve memory/CPU
+  const MAP_PIX = Math.min(1536, Math.max(360, Math.floor(baseSize * DPR)));
   const imgW = MAP_PIX, imgH = MAP_PIX;
-  const img = ctx.createImageData(imgW, imgH);
+
+  // offscreen for faster pixel ops
+  const off = document.createElement('canvas');
+  off.width = imgW; off.height = imgH;
+  const offCtx = off.getContext('2d');
+  const img = offCtx.createImageData(imgW, imgH);
   const data = img.data;
 
-  // light direction for simple shading
   const lightDir = new THREE.Vector3(0.6, 0.8, 0.4).normalize();
+  const eyeHeight = Math.max(6, player.y + 1.2);
+  const maxViewDistance = worldHalf * 1.0;
 
-  // LOS settings: approximate eye height and step size for sampling along the ray
-  const eyeHeight = Math.max(6, player.y + 1.2); // player's view height
-  const maxViewDistance = worldHalf * 1.0; // how far map can see in world units
-  // For each pixel we march from player to pixel sampling terrain heights to detect occlusion.
+  // Precompute heights for every map texel once (faster than repeated nearby sampling)
+  const heightGrid = new Float32Array(imgW * imgH);
+  for(let py=0; py<imgH; py++){
+    const v = py / (imgH - 1);
+    const wz = worldMinZ + v * worldSize;
+    for(let px=0; px<imgW; px++){
+      const u = px / (imgW - 1);
+      const wx = worldMinX + u * worldSize;
+      heightGrid[py * imgW + px] = sampleTerrain(wx, wz);
+    }
+  }
+
+  // Render by reading grid and approximating normals from neighboring cells
   for(let py=0; py<imgH; py++){
     for(let px=0; px<imgW; px++){
+      const idxCell = py * imgW + px;
       const u = px / (imgW - 1);
       const v = py / (imgH - 1);
       const wx = worldMinX + u * worldSize;
       const wz = worldMinZ + v * worldSize;
-      const h = sampleTerrain(wx, wz);
+      const h = heightGrid[idxCell];
 
-      // normal sampling with a small epsilon proportional to world texel
-      const eps = Math.max(0.5, worldSize / imgW);
-      const n = sampleNormal(wx, wz, eps);
+      // approximate normal using finite differences on the grid
+      const sx = Math.max(0, px-1), ex = Math.min(imgW-1, px+1);
+      const sy = Math.max(0, py-1), ey = Math.min(imgH-1, py+1);
+      const hL = heightGrid[py * imgW + sx];
+      const hR = heightGrid[py * imgW + ex];
+      const hU = heightGrid[ey * imgW + px];
+      const hD = heightGrid[sy * imgW + px];
+      const worldDX = ( (ex - sx) / imgW ) * worldSize;
+      const worldDZ = ( (ey - sy) / imgH ) * worldSize;
+      const dx = (hR - hL) / Math.max(0.0001, worldDX);
+      const dz = (hU - hD) / Math.max(0.0001, worldDZ);
+      const nx = -dx, ny = 1, nz = -dz;
+      const nlen = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
+      const n = {x: nx/nlen, y: ny/nlen, z: nz/nlen};
 
-      // base color from elevation + biome tint
+      // color + biome
       const base = colorForHeight(h);
       const bNoise = simplex.noise2d(wx * 0.0008, wz * 0.0008);
       const bm = (bNoise + 1) * 0.5;
@@ -442,59 +471,53 @@ function drawMap(){
       const gg = blend(base.g, tint.g, 0.45 * (1 - altFactor) + 0.35 * altFactor);
       const bb = blend(base.b, tint.b, 0.45 * (1 - altFactor) + 0.35 * altFactor);
 
-      // Lambertian shading
-      const shade = Math.max(0, n.dot(lightDir)) * 0.9 + 0.1;
+      // shading
+      const shade = Math.max(0, (n.x*lightDir.x + n.y*lightDir.y + n.z*lightDir.z)) * 0.9 + 0.1;
       let r = Math.min(1, rr * shade);
       let g = Math.min(1, gg * shade);
       let b = Math.min(1, bb * shade);
 
-      // Determine true LOS from player eye to this world point.
-      // March along the line in world-space and compare terrain height to the line height.
-      const dx = wx - player.x;
-      const dz = wz - player.z;
-      const horizDist = Math.sqrt(dx*dx + dz*dz);
-      let occluded = false;
-      let losVisibility = 1.0; // 1 = visible, 0 = fully occluded
-
+      // LOS: reduced steps for performance but still effective
+      const dxp = wx - player.x;
+      const dzp = wz - player.z;
+      const horizDist = Math.sqrt(dxp*dxp + dzp*dzp);
+      let occluded = false, losVisibility = 1.0;
       if(horizDist > 0.001 && horizDist <= maxViewDistance){
-        const steps = Math.min(48, Math.ceil((horizDist / Math.max(4, CHUNK_SIZE/6)) * 12));
-        // sample along the line excluding the target endpoint to see if intervening terrain blocks view
+        const steps = Math.max(8, Math.min(24, Math.ceil((horizDist / Math.max(4, CHUNK_SIZE/6)) * 8)));
         for(let s=1; s<steps; s++){
           const t = s / steps;
-          const sx = player.x + dx * t;
-          const sz = player.z + dz * t;
-          const terrainH = sampleTerrain(sx, sz);
-          // compute height of the straight line from eyeHeight at player to target height+small offset
-          const targetHeightAtPoint = h + 0.6; // slight above ground target
+          const sxw = player.x + dxp * t;
+          const szw = player.z + dzp * t;
+          // map sample into grid indices for quick lookup where possible
+          const iu = Math.floor(((sxw - worldMinX) / worldSize) * (imgW-1));
+          const iv = Math.floor(((szw - worldMinZ) / worldSize) * (imgH-1));
+          let terrainH = h; // fallback
+          if(iu >= 0 && iu < imgW && iv >= 0 && iv < imgH){
+            terrainH = heightGrid[iv * imgW + iu];
+          } else {
+            terrainH = sampleTerrain(sxw, szw);
+          }
+          const targetHeightAtPoint = h + 0.6;
           const lineH = eyeHeight + (targetHeightAtPoint - eyeHeight) * t;
-          // if terrain at sample is higher than the line (with small margin), it's occluding
           if(terrainH > lineH - 0.6){
             occluded = true;
-            // visibility drops with how close the occluder is to player (closer occluder = stronger)
             const occluderDist = horizDist * t;
             losVisibility = Math.max(0, 1 - (1.4 * (1 - (occluderDist / Math.max(1, horizDist)))));
             break;
           }
         }
       } else if(horizDist > maxViewDistance){
-        // beyond max view distance considered not visible
-        occluded = true;
-        losVisibility = 0;
+        occluded = true; losVisibility = 0;
       }
 
-      // distance-based fog (stronger with distance)
       const distFog = Math.min(1, horizDist / (worldSize * 0.45));
-      // explored chunks still matter but LOS overrides: unexplored and occluded -> stronger fog
       const cx = Math.floor(wx / CHUNK_SIZE);
       const cz = Math.floor(wz / CHUNK_SIZE);
       const key = `${cx},${cz}`;
       const exploredFactor = explored.has(key) ? 0 : 1;
-
-      // combine fog: chunk exploration, distance, and LOS occlusion
       const combinedFog = Math.min(1, distFog * 0.9 + exploredFactor * 0.6 + (occluded ? (1 - losVisibility) * 1.0 : 0));
 
       if(combinedFog > 0.03){
-        // desaturate toward cool fog color and darken
         const gray = (r + g + b) / 3;
         const fogR = blend(r, 0.12, combinedFog);
         const fogG = blend(g, 0.14, combinedFog);
@@ -506,52 +529,60 @@ function drawMap(){
         r *= dark; g *= dark; b *= dark;
       }
 
-      const idx = (py * imgW + px) * 4;
-      data[idx] = (r * 255) | 0;
-      data[idx+1] = (g * 255) | 0;
-      data[idx+2] = (b * 255) | 0;
+      // apply simple saturation and gamma (sRGB) for richer colors on canvas
+      const saturate = (v, s=1.05) => {
+        const mid = 0.5;
+        return Math.min(1, mid + (v - mid) * s);
+      };
+      // convert linear to sRGB-ish gamma for display
+      const toSRGB = (v) => Math.pow(Math.max(0, Math.min(1, v)), 1/2.2);
+      const rr_s = toSRGB(saturate(r, 1.06));
+      const gg_s = toSRGB(saturate(g, 1.02));
+      const bb_s = toSRGB(saturate(b, 1.00));
+      const idx = idxCell * 4;
+      data[idx] = (rr_s * 255) | 0;
+      data[idx+1] = (gg_s * 255) | 0;
+      data[idx+2] = (bb_s * 255) | 0;
       data[idx+3] = 255;
     }
   }
 
-  // draw onto canvas centered, with padding
+  // composite to visible canvas with a dark translucent background
   ctx.clearRect(0,0,mapCanvas.width,mapCanvas.height);
   ctx.fillStyle = 'rgba(6,8,12,0.78)';
   ctx.fillRect(0,0,mapCanvas.width,mapCanvas.height);
 
-  // scale image to fit 80% of smallest canvas dimension (zoomed-in feel)
+  // draw offscreen image centered and scaled
+  offCtx.putImageData(img, 0, 0);
   const drawSize = Math.min(mapCanvas.width, mapCanvas.height) * 0.8;
-  const dx = (mapCanvas.width - drawSize) / 2;
-  const dy = (mapCanvas.height - drawSize) / 2;
+  const dxPos = (mapCanvas.width - drawSize) / 2;
+  const dyPos = (mapCanvas.height - drawSize) / 2;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(off, 0, 0, imgW, imgH, dxPos, dyPos, drawSize, drawSize);
 
-  const off = document.createElement('canvas');
-  off.width = imgW; off.height = imgH;
-  off.getContext('2d').putImageData(img,0,0);
-  ctx.drawImage(off, dx, dy, drawSize, drawSize);
-
-  // faint grid for chunks in view
+  // faint chunk grid
   ctx.strokeStyle = 'rgba(255,255,255,0.04)';
   ctx.lineWidth = 1;
   const chunksAcross = RANGE*2+1;
   const cell = drawSize / chunksAcross;
   for(let i=0;i<=chunksAcross;i++){
-    const px = dx + i * cell;
-    ctx.beginPath(); ctx.moveTo(px, dy); ctx.lineTo(px, dy + drawSize); ctx.stroke();
-    const py = dy + i * cell;
-    ctx.beginPath(); ctx.moveTo(dx, py); ctx.lineTo(dx + drawSize, py); ctx.stroke();
+    const px = dxPos + i * cell;
+    ctx.beginPath(); ctx.moveTo(px, dyPos); ctx.lineTo(px, dyPos + drawSize); ctx.stroke();
+    const py = dyPos + i * cell;
+    ctx.beginPath(); ctx.moveTo(dxPos, py); ctx.lineTo(dxPos + drawSize, py); ctx.stroke();
   }
 
-  // player marker
+  // player marker & orientation
   const relX = (player.x - worldMinX) / worldSize;
   const relZ = (player.z - worldMinZ) / worldSize;
-  const markX = dx + relX * drawSize;
-  const markY = dy + relZ * drawSize;
+  const markX = dxPos + relX * drawSize;
+  const markY = dyPos + relZ * drawSize;
   ctx.beginPath();
   ctx.fillStyle = 'white';
-  ctx.arc(markX, markY, Math.max(6, drawSize * 0.025), 0, Math.PI*2);
+  ctx.arc(markX, markY, Math.max(6, drawSize * 0.02), 0, Math.PI*2);
   ctx.fill();
 
-  // orientation arrow
   const fwd = new THREE.Vector3(0,0,1).applyQuaternion(playerSphere.quaternion);
   const arrowScale = Math.max(8, drawSize * 0.035);
   ctx.beginPath();
@@ -562,9 +593,8 @@ function drawMap(){
   ctx.fillStyle = 'rgba(255,255,255,0.95)';
   ctx.fill();
 
-  // caption
-  ctx.fillStyle = 'rgba(255,255,255,0.65)';
-  ctx.font = `${Math.max(12, drawSize*0.03)}px sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.font = `${Math.max(12, drawSize*0.025)}px sans-serif`;
   ctx.textAlign = 'right';
   ctx.fillText('Top-down (zoomed)', mapCanvas.width - 12, mapCanvas.height - 12);
 }

@@ -1,7 +1,7 @@
 :root{
   --bg:#a8d8ff;
-  --ui-bg: rgba(255,255,255,0.85);
-  --btn-size:56px;
+  --ui-bg: rgba(255,255,255,0.95);
+  --btn-size:64px; /* larger for touch */
 }
 html,body{
   height:100%;
@@ -27,13 +27,14 @@ html,body{
   border-radius:50%;
   border:none;
   background:var(--ui-bg);
-  box-shadow: 0 6px 18px rgba(0,0,0,0.2);
-  font-size:22px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.22);
+  font-size:24px;
   display:flex;
   align-items:center;
   justify-content:center;
   padding:0;
   z-index:20;
+  touch-action: manipulation;
 }
 #map-canvas{
   position: fixed;
@@ -42,14 +43,22 @@ html,body{
   height:100%;
   z-index:18;
   touch-action:none;
-  background:rgba(0,0,0,0.0);
+  /* subtle dark backing helps map legibility on mobile;
+     allow backdrop-filter if supported for a polished look */
+  background: rgba(6,8,12,0.42);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  -webkit-user-select: none;
+  user-select: none;
+  /* ensure touch events pass when hidden, and are usable when visible */
+  pointer-events: auto;
 }
 .hidden{display:none;}
 #hint{
   position: fixed;
   left:12px;
   bottom: 18px;
-  background: rgba(255,255,255,0.85);
+  background: rgba(255,255,255,0.9);
   padding:8px 12px;
   border-radius:8px;
   font-size:13px;

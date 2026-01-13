@@ -83,7 +83,7 @@ const OCTAVES = 4;
 const HEIGHT_SCALE = 24;
 
 let scene, camera, renderer;
-let playerSphere, spherePivot;
+let playerSphere;
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2();
 let simplex = new Simplex(Date.now() & 65535);
@@ -128,13 +128,11 @@ function init(){
   playerSphere.castShadow = true;
   playerSphere.receiveShadow = false;
 
-  // pivot to help orbiting camera smoothly
-  spherePivot = new THREE.Object3D();
-  spherePivot.add(playerSphere);
-  scene.add(spherePivot);
-
-  // initial placement at world origin on terrain height 0
-  playerSphere.position.set(0,10,0);
+  // add sphere to scene and place it on the terrain (not as a child of a pivot)
+  scene.add(playerSphere);
+  const radius = 2.2;
+  const h0 = sampleTerrain(0, 0);
+  playerSphere.position.set(0, h0 + radius, 0);
 
   // chunk manager
   chunkManager = new ChunkManager();
@@ -409,15 +407,12 @@ function animate(){
     playerSphere.position.y = THREE.MathUtils.lerp(playerSphere.position.y, h, 0.08);
   }
 
-  // Keep the pivot centered at sphere for camera to orbit and align to terrain normal
-  spherePivot.position.copy(playerSphere.position);
-
-  // align pivot up to the terrain normal so the sphere appears flush to slopes
+  // align sphere to the terrain normal so it sits flush on slopes
   const normal = sampleNormal(playerSphere.position.x, playerSphere.position.z);
   const fromUp = new THREE.Vector3(0,1,0);
   const targetQuat = new THREE.Quaternion().setFromUnitVectors(fromUp, normal);
   // smooth the rotation for stability
-  spherePivot.quaternion.slerp(targetQuat, Math.min(1, dt * 6));
+  playerSphere.quaternion.slerp(targetQuat, Math.min(1, dt * 6));
 
   // update camera
   updateCamera(dt);

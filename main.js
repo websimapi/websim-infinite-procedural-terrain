@@ -209,7 +209,7 @@ class ChunkManager {
       roughness:1
     });
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.receiveShadow = false;
+    mesh.receiveShadow = true;
     mesh.position.set(cx*CHUNK_SIZE,0,cz*CHUNK_SIZE);
     mesh.frustumCulled = true;
     mesh.userData = {cx,cz};
@@ -240,6 +240,22 @@ function sampleTerrain(x, z){
   // add a low-frequency rolling baseline
   const baseline = simplex.noise2d(x*0.0006, z*0.0006) * 6;
   return h + baseline;
+}
+
+// approximate terrain normal by sampling nearby heights
+function sampleNormal(x, z, eps = 0.5){
+  // sample three nearby points to form tangent vectors
+  const hL = sampleTerrain(x - eps, z);
+  const hR = sampleTerrain(x + eps, z);
+  const hD = sampleTerrain(x, z - eps);
+  const hU = sampleTerrain(x, z + eps);
+  // compute partial derivatives
+  const dx = (hR - hL) / (2*eps);
+  const dz = (hU - hD) / (2*eps);
+  // normal is (-dx, 1, -dz) normalized
+  const nx = -dx, ny = 1, nz = -dz;
+  const len = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
+  return new THREE.Vector3(nx/len, ny/len, nz/len);
 }
 function colorForHeight(h){
   // return rgb 0..1
@@ -393,8 +409,15 @@ function animate(){
     playerSphere.position.y = THREE.MathUtils.lerp(playerSphere.position.y, h, 0.08);
   }
 
-  // Keep the pivot centered at sphere for camera to orbit
+  // Keep the pivot centered at sphere for camera to orbit and align to terrain normal
   spherePivot.position.copy(playerSphere.position);
+
+  // align pivot up to the terrain normal so the sphere appears flush to slopes
+  const normal = sampleNormal(playerSphere.position.x, playerSphere.position.z);
+  const fromUp = new THREE.Vector3(0,1,0);
+  const targetQuat = new THREE.Quaternion().setFromUnitVectors(fromUp, normal);
+  // smooth the rotation for stability
+  spherePivot.quaternion.slerp(targetQuat, Math.min(1, dt * 6));
 
   // update camera
   updateCamera(dt);

@@ -184,47 +184,79 @@ class ChunkManager {
   }
 
   createChunk(cx, cz){
-    // plane centered at chunk center
+    // plane centered at chunk center (vertices are local coords; convert to world coords for sampling)
     const geo = new THREE.PlaneBufferGeometry(CHUNK_SIZE, CHUNK_SIZE, SEGMENTS, SEGMENTS);
     geo.rotateX(-Math.PI/2);
     const pos = geo.attributes.position;
     const vertexCount = pos.count;
-    // We'll build a height grid, smooth it (two-pass blur) for softer transitions, then assign colors.
+    const colors = new Float32Array(vertexCount * 3);
+
+    // resolution per side (SEGMENTS+1)
     const resolution = SEGMENTS + 1;
-    const heights = new Float32Array(vertexCount); // temp typed array
-    // populate heights
+
+    // For seamless edges, sample terrain in world-space for each vertex and perform a small world-space 3x3 sample smoothing.
+    // This ensures vertices on chunk borders use exactly the same world samples as neighboring chunks.
+    const worldXForIndex = (i) => pos.getX(i) + cx * CHUNK_SIZE;
+    const worldZForIndex = (i) => pos.getZ(i) + cz * CHUNK_SIZE;
+
+    // small offset in world units for smoothing (relative to vertex spacing)
+    const smoothOffset = Math.max(0.5, VERT_SPACING * 0.9);
+
     for(let i=0;i<vertexCount;i++){
-      const vx = pos.getX(i) + cx*CHUNK_SIZE;
-      const vz = pos.getZ(i) + cz*CHUNK_SIZE;
-      heights[i] = sampleTerrain(vx, vz);
-    }
-    // single-pass smoothing kernel (box blur) to soften vertex jumps without heavy cost
-    const smoothed = new Float32Array(vertexCount);
-    const getIndex = (gx,gz) => gz * resolution + gx;
-    for(let gz=0; gz<resolution; gz++){
-      for(let gx=0; gx<resolution; gx++){
-        let sum = 0, cnt = 0;
-        for(let oz=-1; oz<=1; oz++){
-          for(let ox=-1; ox<=1; ox++){
-            const nx = gx + ox, nz = gz + oz;
-            if(nx>=0 && nx<resolution && nz>=0 && nz<resolution){
-              sum += heights[getIndex(nx,nz)];
-              cnt++;
-            }
-          }
+      const wx = worldXForIndex(i);
+      const wz = worldZForIndex(i);
+
+      // 3x3 world-space smoothing: average sampleTerrain at the vertex and its 8 neighbors (world offsets).
+      let sumH = 0, cnt = 0;
+      for(let oz=-1; oz<=1; oz++){
+        for(let ox=-1; ox<=1; ox++){
+          const sx = wx + ox * smoothOffset;
+          const sz = wz + oz * smoothOffset;
+          sumH += sampleTerrain(sx, sz);
+          cnt++;
         }
-        smoothed[getIndex(gx,gz)] = sum / cnt;
       }
+      const h = sumH / cnt;
+
+      pos.setY(i, h);
+
+      // biome mask: low-frequency noise to pick a biome tint
+      const b = simplex.noise2d(wx * 0.0008, wz * 0.0008); // -1..1
+      // map b to 0..1
+      const bm = (b + 1) * 0.5;
+
+      // base color by elevation
+      const base = colorForHeight(h);
+
+      // biome tints (grass, desert, rock, tundra)
+      let tint = {r:1,g:1,b:1};
+      if(bm < 0.25){
+        // wetter / greener
+        tint = {r:0.85, g:1.0, b:0.85};
+      } else if(bm < 0.5){
+        // neutral / mixed
+        tint = {r:1.0, g:0.95, b:0.85};
+      } else if(bm < 0.78){
+        // rocky / brown
+        tint = {r:0.9, g:0.85, b:0.78};
+      } else {
+        // cold / pale (higher chance of snow at altitude)
+        tint = {r:0.95, g:0.98, b:1.0};
+      }
+
+      // blend base color with tint weighted by altitude to keep snowy peaks bright
+      const altFactor = Math.min(1, Math.max(0, (h - 10) / 18)); // high -> favor pale tint
+      const blend = (a, b, t) => a * (1 - t) + b * t;
+
+      const rr = blend(base.r, tint.r, 0.45 * (1 - altFactor) + 0.35 * altFactor);
+      const gg = blend(base.g, tint.g, 0.45 * (1 - altFactor) + 0.35 * altFactor);
+      const bb = blend(base.b, tint.b, 0.45 * (1 - altFactor) + 0.35 * altFactor);
+
+      colors[i*3] = rr;
+      colors[i*3 + 1] = gg;
+      colors[i*3 + 2] = bb;
     }
-    // copy once
-    for(let i=0;i<vertexCount;i++) heights[i] = smoothed[i];
-    // apply smoothed heights and compute colors
-    const colors = new Float32Array(vertexCount*3);
-    for(let i=0;i<vertexCount;i++){
-      pos.setY(i, heights[i]);
-      const col = colorForHeight(heights[i]);
-      colors[i*3]=col.r; colors[i*3+1]=col.g; colors[i*3+2]=col.b;
-    }
+
     geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
     geo.computeVertexNormals();
 

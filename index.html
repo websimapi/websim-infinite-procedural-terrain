@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Infinite Procedural Terrain</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <canvas id="three-canvas"></canvas>
+
+  <!-- Map overlay -->
+  <canvas id="map-canvas" class="hidden"></canvas>
+
+  <!-- UI: small circular map button (toolbelt) -->
+  <button id="map-btn" title="Toggle map">🗺️</button>
+
+  <!-- Instructions (small, unobtrusive for desktop) -->
+  <div id="hint">Tap/click terrain to move • M to toggle map</div>
+
+  <!-- THREE.js only from allowed CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="main.js"></script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>

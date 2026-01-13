@@ -1,0 +1,58 @@
+:root{
+  --bg:#a8d8ff;
+  --ui-bg: rgba(255,255,255,0.85);
+  --btn-size:56px;
+}
+html,body{
+  height:100%;
+  margin:0;
+  background:var(--bg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  -webkit-tap-highlight-color: transparent;
+}
+#three-canvas{
+  position:fixed;
+  inset:0;
+  width:100%;
+  height:100%;
+  display:block;
+  touch-action: none;
+}
+#map-btn{
+  position: fixed;
+  right: 14px;
+  bottom: 18px;
+  width:var(--btn-size);
+  height:var(--btn-size);
+  border-radius:50%;
+  border:none;
+  background:var(--ui-bg);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.2);
+  font-size:22px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:0;
+  z-index:20;
+}
+#map-canvas{
+  position: fixed;
+  inset: 0;
+  width:100%;
+  height:100%;
+  z-index:18;
+  touch-action:none;
+  background:rgba(0,0,0,0.0);
+}
+.hidden{display:none;}
+#hint{
+  position: fixed;
+  left:12px;
+  bottom: 18px;
+  background: rgba(255,255,255,0.85);
+  padding:8px 12px;
+  border-radius:8px;
+  font-size:13px;
+  z-index:20;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+}

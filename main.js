@@ -73,10 +73,10 @@ const hint = document.getElementById('hint');
 const RENDER_W = () => canvas.clientWidth;
 const RENDER_H = () => canvas.clientHeight;
 
-const CHUNK_SIZE = 100;     // world units per chunk (square)
-const SEGMENTS = 192;       // per-plane segments (much higher detail - expensive)
+const CHUNK_SIZE = 200;     // world units per chunk (square) — increased for larger terrain scale
+const SEGMENTS = 192;       // per-plane segments (same density; larger chunks so more world per chunk)
 const VERT_SPACING = CHUNK_SIZE / SEGMENTS;
-const PLAYER_RADIUS = 1.75;  // human-sized player radius (meters)
+const PLAYER_RADIUS = 0.9;  // reduced player radius so the sphere is human-sized relative to the larger terrain
 const VISIBLE_RADIUS = 1;   // chunk radius (1 => 3x3 grid). Use 2 for 5x5 if desired
 const GRID = VISIBLE_RADIUS*2+1;
 const NOISE_SCALE = 0.008;
@@ -93,7 +93,7 @@ let clock = new THREE.Clock();
 let chunkManager;
 let targetPos = null;
 let velocity = new THREE.Vector3();
-let cameraOffset = new THREE.Vector3(0, 20, -36); // fixed behind and above (no orbit)
+let cameraOffset = new THREE.Vector3(0, 30, -60); // fixed behind and above (no orbit) — increased to suit larger world and smaller sphere
 
 // Keep track of explored chunks for map
 let explored = new Set();

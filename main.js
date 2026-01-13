@@ -76,7 +76,7 @@ const RENDER_H = () => canvas.clientHeight;
 const CHUNK_SIZE = 100;     // world units per chunk (square)
 const SEGMENTS = 192;       // per-plane segments (much higher detail - expensive)
 const VERT_SPACING = CHUNK_SIZE / SEGMENTS;
-const PLAYER_RADIUS = 1.8;  // human-sized player radius (meters)
+const PLAYER_RADIUS = 1.75;  // human-sized player radius (meters)
 const VISIBLE_RADIUS = 1;   // chunk radius (1 => 3x3 grid). Use 2 for 5x5 if desired
 const GRID = VISIBLE_RADIUS*2+1;
 const NOISE_SCALE = 0.008;
@@ -93,8 +93,7 @@ let clock = new THREE.Clock();
 let chunkManager;
 let targetPos = null;
 let velocity = new THREE.Vector3();
-let cameraOffset = new THREE.Vector3(0, 20, -36); // behind and above
-let orbitAngle = 0;
+let cameraOffset = new THREE.Vector3(0, 20, -36); // fixed behind and above (no orbit)
 
 // Keep track of explored chunks for map
 let explored = new Set();
@@ -309,10 +308,9 @@ function applyRolling(sphere, deltaMove){
 
 // --------------------------- Camera -----------------------------------------------------
 function updateCamera(dt){
-  // Orbit angle slowly rotates based on input / time
-  orbitAngle += dt*0.2;
+  // Fixed third-person follow: keep camera at a stable offset behind/above the player
   const desired = new THREE.Vector3().copy(playerSphere.position).add(
-    new THREE.Vector3().copy(cameraOffset).applyAxisAngle(new THREE.Vector3(0,1,0), orbitAngle)
+    new THREE.Vector3().copy(cameraOffset)
   );
   camera.position.lerp(desired, 0.12);
   camera.lookAt(playerSphere.position);

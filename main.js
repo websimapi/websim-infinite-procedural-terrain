@@ -73,15 +73,15 @@ const hint = document.getElementById('hint');
 const RENDER_W = () => canvas.clientWidth;
 const RENDER_H = () => canvas.clientHeight;
 
-const CHUNK_SIZE = 600;     // much larger world units per chunk for expansive terrain
+const CHUNK_SIZE = 1200;    // much larger world units per chunk for an expansive terrain
 const SEGMENTS = 256;       // high subdivision count for detailed mesh (more expensive)
 const VERT_SPACING = CHUNK_SIZE / SEGMENTS;
 const PLAYER_RADIUS = 0.45; // smaller, life-like human scale relative to the larger terrain
 const VISIBLE_RADIUS = 2;   // 2 => 5x5 grid for smoother streaming of a larger world
 const GRID = VISIBLE_RADIUS*2+1;
-const NOISE_SCALE = 0.004;  // lower frequency for broader features
-const OCTAVES = 5;          // more octaves for richer terrain detail
-const HEIGHT_SCALE = 80;    // increase vertical range for dramatic mountains and valleys
+const NOISE_SCALE = 0.002;  // lower frequency for broader, more rolling features
+const OCTAVES = 5;          // multiple octaves for richer terrain detail
+const HEIGHT_SCALE = 50;    // reduced vertical exaggeration for more realistic relief
 
 let scene, camera, renderer;
 let playerSphere;
@@ -187,13 +187,43 @@ class ChunkManager {
     const geo = new THREE.PlaneBufferGeometry(CHUNK_SIZE, CHUNK_SIZE, SEGMENTS, SEGMENTS);
     geo.rotateX(-Math.PI/2);
     const pos = geo.attributes.position;
-    const colors = new Float32Array((pos.count)*3);
-    for(let i=0;i<pos.count;i++){
+    const vertexCount = pos.count;
+    // We'll build a height grid, smooth it (two-pass blur) for softer transitions, then assign colors.
+    const resolution = SEGMENTS + 1;
+    const heights = new Float32(vertexCount); // temp typed array
+    // populate heights
+    for(let i=0;i<vertexCount;i++){
       const vx = pos.getX(i) + cx*CHUNK_SIZE;
       const vz = pos.getZ(i) + cz*CHUNK_SIZE;
-      const h = sampleTerrain(vx, vz);
-      pos.setY(i, h);
-      const col = colorForHeight(h);
+      heights[i] = sampleTerrain(vx, vz);
+    }
+    // two-pass smoothing kernel (box blur) across the grid to soften harsh vertex jumps
+    const smoothed = new Float32(vertexCount);
+    const getIndex = (gx,gz) => gz * resolution + gx;
+    for(let pass=0; pass<2; pass++){
+      for(let gz=0; gz<resolution; gz++){
+        for(let gx=0; gx<resolution; gx++){
+          let sum = 0, cnt = 0;
+          for(let oz=-1; oz<=1; oz++){
+            for(let ox=-1; ox<=1; ox++){
+              const nx = gx + ox, nz = gz + oz;
+              if(nx>=0 && nx<resolution && nz>=0 && nz<resolution){
+                sum += heights[getIndex(nx,nz)];
+                cnt++;
+              }
+            }
+          }
+          smoothed[getIndex(gx,gz)] = sum / cnt;
+        }
+      }
+      // swap buffers for next pass
+      for(let i=0;i<vertexCount;i++) heights[i] = smoothed[i];
+    }
+    // apply smoothed heights and compute colors
+    const colors = new Float32Array(vertexCount*3);
+    for(let i=0;i<vertexCount;i++){
+      pos.setY(i, heights[i]);
+      const col = colorForHeight(heights[i]);
       colors[i*3]=col.r; colors[i*3+1]=col.g; colors[i*3+2]=col.b;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors,3));

@@ -386,8 +386,7 @@ function toggleMap(){
   if(mapVisible) drawMap();
 }
 function drawMap(){
-  // True top-down map: render a shaded overhead "camera" view by sampling terrain heights & normals.
-  // Map covers a chunk-radius area around the player; unexplored chunks receive a fog blend.
+  // Top-down map: more zoomed in and per-pixel line-of-sight (LOS) visibility + distance fog.
   mapCanvas.width = window.innerWidth;
   mapCanvas.height = window.innerHeight;
   const ctx = mapCanvas.getContext('2d');
@@ -395,27 +394,31 @@ function drawMap(){
   const player = playerSphere.position;
   const pcx = Math.floor(player.x / CHUNK_SIZE);
   const pcz = Math.floor(player.z / CHUNK_SIZE);
-  const RANGE = 12; // chunks radius shown
-  // world extents to render (centered on player)
+
+  // zoom in: show fewer chunks but more detail
+  const RANGE = 4; // chunks radius shown (smaller => zoomed in)
   const worldHalf = (RANGE + 0.5) * CHUNK_SIZE;
   const worldMinX = player.x - worldHalf;
   const worldMinZ = player.z - worldHalf;
   const worldSize = worldHalf * 2;
 
-  // choose a map pixel size (keep reasonable resolution)
-  const MAP_PIX = Math.min(512, Math.floor(Math.min(mapCanvas.width, mapCanvas.height)));
+  // higher-resolution map for a zoomed-in view (bounded for perf)
+  const MAP_PIX = Math.min(600, Math.floor(Math.min(mapCanvas.width, mapCanvas.height)));
   const imgW = MAP_PIX, imgH = MAP_PIX;
   const img = ctx.createImageData(imgW, imgH);
   const data = img.data;
 
-  // light direction for simple shading (top-down with slight sun angle)
+  // light direction for simple shading
   const lightDir = new THREE.Vector3(0.6, 0.8, 0.4).normalize();
 
-  // for each pixel, sample terrain and compute shaded color
-  for(let y=0;y<imgH;y++){
-    for(let x=0;x<imgW;x++){
-      const u = x / (imgW - 1);
-      const v = y / (imgH - 1);
+  // LOS settings: approximate eye height and step size for sampling along the ray
+  const eyeHeight = Math.max(6, player.y + 1.2); // player's view height
+  const maxViewDistance = worldHalf * 1.0; // how far map can see in world units
+  // For each pixel we march from player to pixel sampling terrain heights to detect occlusion.
+  for(let py=0; py<imgH; py++){
+    for(let px=0; px<imgW; px++){
+      const u = px / (imgW - 1);
+      const v = py / (imgH - 1);
       const wx = worldMinX + u * worldSize;
       const wz = worldMinZ + v * worldSize;
       const h = sampleTerrain(wx, wz);
@@ -424,7 +427,7 @@ function drawMap(){
       const eps = Math.max(0.5, worldSize / imgW);
       const n = sampleNormal(wx, wz, eps);
 
-      // base color from elevation + biome tint (reuse colorForHeight and biome noise)
+      // base color from elevation + biome tint
       const base = colorForHeight(h);
       const bNoise = simplex.noise2d(wx * 0.0008, wz * 0.0008);
       const bm = (bNoise + 1) * 0.5;
@@ -445,30 +448,65 @@ function drawMap(){
       let g = Math.min(1, gg * shade);
       let b = Math.min(1, bb * shade);
 
-      // determine corresponding chunk; if not explored, apply fog/darken and bluish desaturation
+      // Determine true LOS from player eye to this world point.
+      // March along the line in world-space and compare terrain height to the line height.
+      const dx = wx - player.x;
+      const dz = wz - player.z;
+      const horizDist = Math.sqrt(dx*dx + dz*dz);
+      let occluded = false;
+      let losVisibility = 1.0; // 1 = visible, 0 = fully occluded
+
+      if(horizDist > 0.001 && horizDist <= maxViewDistance){
+        const steps = Math.min(48, Math.ceil((horizDist / Math.max(4, CHUNK_SIZE/6)) * 12));
+        // sample along the line excluding the target endpoint to see if intervening terrain blocks view
+        for(let s=1; s<steps; s++){
+          const t = s / steps;
+          const sx = player.x + dx * t;
+          const sz = player.z + dz * t;
+          const terrainH = sampleTerrain(sx, sz);
+          // compute height of the straight line from eyeHeight at player to target height+small offset
+          const targetHeightAtPoint = h + 0.6; // slight above ground target
+          const lineH = eyeHeight + (targetHeightAtPoint - eyeHeight) * t;
+          // if terrain at sample is higher than the line (with small margin), it's occluding
+          if(terrainH > lineH - 0.6){
+            occluded = true;
+            // visibility drops with how close the occluder is to player (closer occluder = stronger)
+            const occluderDist = horizDist * t;
+            losVisibility = Math.max(0, 1 - (1.4 * (1 - (occluderDist / Math.max(1, horizDist)))));
+            break;
+          }
+        }
+      } else if(horizDist > maxViewDistance){
+        // beyond max view distance considered not visible
+        occluded = true;
+        losVisibility = 0;
+      }
+
+      // distance-based fog (stronger with distance)
+      const distFog = Math.min(1, horizDist / (worldSize * 0.45));
+      // explored chunks still matter but LOS overrides: unexplored and occluded -> stronger fog
       const cx = Math.floor(wx / CHUNK_SIZE);
       const cz = Math.floor(wz / CHUNK_SIZE);
       const key = `${cx},${cz}`;
-      if(!explored.has(key)){
-        // fog strength based on distance from player (closer unexplored slightly less foggy)
-        const dx = (cx - pcx);
-        const dz = (cz - pcz);
-        const distChunk = Math.sqrt(dx*dx + dz*dz);
-        const fog = Math.min(1, 0.22 + distChunk * 0.05);
-        // desaturate toward cool fog color
+      const exploredFactor = explored.has(key) ? 0 : 1;
+
+      // combine fog: chunk exploration, distance, and LOS occlusion
+      const combinedFog = Math.min(1, distFog * 0.9 + exploredFactor * 0.6 + (occluded ? (1 - losVisibility) * 1.0 : 0));
+
+      if(combinedFog > 0.03){
+        // desaturate toward cool fog color and darken
         const gray = (r + g + b) / 3;
-        const fogR = blend(r, 0.12, fog);
-        const fogG = blend(g, 0.14, fog);
-        const fogB = blend(b, 0.18, fog);
-        r = blend(r, fogR * 0.6 + gray * 0.4, fog);
-        g = blend(g, fogG * 0.6 + gray * 0.4, fog);
-        b = blend(b, fogB * 0.6 + gray * 0.4, fog);
-        // darken overall
-        const dark = 1 - 0.45 * fog;
+        const fogR = blend(r, 0.12, combinedFog);
+        const fogG = blend(g, 0.14, combinedFog);
+        const fogB = blend(b, 0.18, combinedFog);
+        r = blend(r, fogR * 0.6 + gray * 0.4, combinedFog);
+        g = blend(g, fogG * 0.6 + gray * 0.4, combinedFog);
+        b = blend(b, fogB * 0.6 + gray * 0.4, combinedFog);
+        const dark = 1 - 0.55 * combinedFog;
         r *= dark; g *= dark; b *= dark;
       }
 
-      const idx = (y * imgW + x) * 4;
+      const idx = (py * imgW + px) * 4;
       data[idx] = (r * 255) | 0;
       data[idx+1] = (g * 255) | 0;
       data[idx+2] = (b * 255) | 0;
@@ -478,22 +516,21 @@ function drawMap(){
 
   // draw onto canvas centered, with padding
   ctx.clearRect(0,0,mapCanvas.width,mapCanvas.height);
-  // background vignette
-  ctx.fillStyle = 'rgba(6,8,12,0.75)';
+  ctx.fillStyle = 'rgba(6,8,12,0.78)';
   ctx.fillRect(0,0,mapCanvas.width,mapCanvas.height);
 
-  // scale image to fit 90% of smallest canvas dimension
-  const drawSize = Math.min(mapCanvas.width, mapCanvas.height) * 0.9;
+  // scale image to fit 80% of smallest canvas dimension (zoomed-in feel)
+  const drawSize = Math.min(mapCanvas.width, mapCanvas.height) * 0.8;
   const dx = (mapCanvas.width - drawSize) / 2;
   const dy = (mapCanvas.height - drawSize) / 2;
-  // putImageData requires matching sizes; draw to an offscreen canvas for scaling
+
   const off = document.createElement('canvas');
   off.width = imgW; off.height = imgH;
   off.getContext('2d').putImageData(img,0,0);
   ctx.drawImage(off, dx, dy, drawSize, drawSize);
 
-  // overlay chunk grid faintly
-  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  // faint grid for chunks in view
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
   ctx.lineWidth = 1;
   const chunksAcross = RANGE*2+1;
   const cell = drawSize / chunksAcross;
@@ -504,38 +541,19 @@ function drawMap(){
     ctx.beginPath(); ctx.moveTo(dx, py); ctx.lineTo(dx + drawSize, py); ctx.stroke();
   }
 
-  // draw explored overlay subtle: slightly brighter border on explored chunk centers
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  for(let dz=-RANGE; dz<=RANGE; dz++){
-    for(let dx=-RANGE; dx<=RANGE; dx++){
-      const cx = pcx + dx, cz = pcz + dz;
-      const key = `${cx},${cz}`;
-      if(explored.has(key)){
-        const cxRel = (dx + RANGE) * cell + dx * 0; // cell computed
-        const x0 = dx; // no-op placeholder to keep code readable
-        // draw subtle rectangle
-        const rx = dx; // no-op
-        // compute rect position
-        const rxPos = dx; // no-op
-        // actual rect:
-        const xRect = dx; // retained no-op to satisfy linters; compute below properly
-      }
-    }
-  }
-
-  // player marker in map coordinates
+  // player marker
   const relX = (player.x - worldMinX) / worldSize;
   const relZ = (player.z - worldMinZ) / worldSize;
   const markX = dx + relX * drawSize;
   const markY = dy + relZ * drawSize;
   ctx.beginPath();
   ctx.fillStyle = 'white';
-  ctx.arc(markX, markY, Math.max(6, drawSize * 0.02), 0, Math.PI*2);
+  ctx.arc(markX, markY, Math.max(6, drawSize * 0.025), 0, Math.PI*2);
   ctx.fill();
 
-  // orientation arrow (show forward)
+  // orientation arrow
   const fwd = new THREE.Vector3(0,0,1).applyQuaternion(playerSphere.quaternion);
-  const arrowScale = Math.max(8, drawSize * 0.03);
+  const arrowScale = Math.max(8, drawSize * 0.035);
   ctx.beginPath();
   ctx.moveTo(markX + fwd.x * arrowScale, markY + fwd.z * arrowScale);
   ctx.lineTo(markX - fwd.x * arrowScale * 0.4 + fwd.z * arrowScale * 0.25, markY - fwd.z * arrowScale * 0.4 + fwd.x * arrowScale * 0.25);
@@ -544,11 +562,11 @@ function drawMap(){
   ctx.fillStyle = 'rgba(255,255,255,0.95)';
   ctx.fill();
 
-  // subtle caption
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  // caption
+  ctx.fillStyle = 'rgba(255,255,255,0.65)';
   ctx.font = `${Math.max(12, drawSize*0.03)}px sans-serif`;
   ctx.textAlign = 'right';
-  ctx.fillText('Top-down', mapCanvas.width - 12, mapCanvas.height - 12);
+  ctx.fillText('Top-down (zoomed)', mapCanvas.width - 12, mapCanvas.height - 12);
 }
 
 // --------------------------- Animation Loop -------------------------------------------

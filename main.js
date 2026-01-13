@@ -73,15 +73,15 @@ const hint = document.getElementById('hint');
 const RENDER_W = () => canvas.clientWidth;
 const RENDER_H = () => canvas.clientHeight;
 
-const CHUNK_SIZE = 200;     // world units per chunk (square) — increased for larger terrain scale
-const SEGMENTS = 192;       // per-plane segments (same density; larger chunks so more world per chunk)
+const CHUNK_SIZE = 600;     // much larger world units per chunk for expansive terrain
+const SEGMENTS = 256;       // high subdivision count for detailed mesh (more expensive)
 const VERT_SPACING = CHUNK_SIZE / SEGMENTS;
-const PLAYER_RADIUS = 0.9;  // reduced player radius so the sphere is human-sized relative to the larger terrain
-const VISIBLE_RADIUS = 1;   // chunk radius (1 => 3x3 grid). Use 2 for 5x5 if desired
+const PLAYER_RADIUS = 0.45; // smaller, life-like human scale relative to the larger terrain
+const VISIBLE_RADIUS = 2;   // 2 => 5x5 grid for smoother streaming of a larger world
 const GRID = VISIBLE_RADIUS*2+1;
-const NOISE_SCALE = 0.008;
-const OCTAVES = 4;
-const HEIGHT_SCALE = 24;
+const NOISE_SCALE = 0.004;  // lower frequency for broader features
+const OCTAVES = 5;          // more octaves for richer terrain detail
+const HEIGHT_SCALE = 80;    // increase vertical range for dramatic mountains and valleys
 
 let scene, camera, renderer;
 let playerSphere;

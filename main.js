@@ -74,14 +74,14 @@ const RENDER_W = () => canvas.clientWidth;
 const RENDER_H = () => canvas.clientHeight;
 
 const CHUNK_SIZE = 1200;    // much larger world units per chunk for an expansive terrain
-const SEGMENTS = 256;       // high subdivision count for detailed mesh (more expensive)
+const SEGMENTS = 128;       // reduced subdivisions for much better perf on mobile
 const VERT_SPACING = CHUNK_SIZE / SEGMENTS;
-const PLAYER_RADIUS = 0.45; // smaller, life-like human scale relative to the larger terrain
+const PLAYER_RADIUS = 0.6;  // more comfortable human scale relative to the larger terrain
 const VISIBLE_RADIUS = 2;   // 2 => 5x5 grid for smoother streaming of a larger world
 const GRID = VISIBLE_RADIUS*2+1;
 const NOISE_SCALE = 0.002;  // lower frequency for broader, more rolling features
-const OCTAVES = 5;          // multiple octaves for richer terrain detail
-const HEIGHT_SCALE = 50;    // reduced vertical exaggeration for more realistic relief
+const OCTAVES = 4;          // fewer octaves to reduce CPU for noise
+const HEIGHT_SCALE = 36;    // slightly reduced vertical exaggeration for realistic relief
 
 let scene, camera, renderer;
 let playerSphere;
@@ -101,10 +101,10 @@ let explored = new Set();
 // --------------------------- Init Three ------------------------------------------------
 function init(){
   // renderer
-  renderer = new THREE.WebGLRenderer({canvas, antialias:true});
-  renderer.setPixelRatio(window.devicePixelRatio || 1);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // reduce expensive settings for smoother performance on mobile
+  renderer = new THREE.WebGLRenderer({canvas, antialias:false});
+  renderer.setPixelRatio(Math.min(1, window.devicePixelRatio || 1));
+  renderer.shadowMap.enabled = false;
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xa8d8ff);
@@ -122,8 +122,9 @@ function init(){
   scene.add(dir);
 
   // player sphere (human-sized)
-  const sphGeo = new THREE.SphereGeometry(PLAYER_RADIUS, 48, 36);
-  const sphMat = new THREE.MeshStandardMaterial({color:0xeeeeee, metalness:0.1, roughness:0.7});
+  // cheaper sphere tessellation for performance
+  const sphGeo = new THREE.SphereGeometry(PLAYER_RADIUS, 24, 16);
+  const sphMat = new THREE.MeshStandardMaterial({color:0xeeeeee, metalness:0.08, roughness:0.8});
   playerSphere = new THREE.Mesh(sphGeo, sphMat);
   playerSphere.castShadow = true;
   playerSphere.receiveShadow = false;
@@ -197,28 +198,26 @@ class ChunkManager {
       const vz = pos.getZ(i) + cz*CHUNK_SIZE;
       heights[i] = sampleTerrain(vx, vz);
     }
-    // two-pass smoothing kernel (box blur) across the grid to soften harsh vertex jumps
+    // single-pass smoothing kernel (box blur) to soften vertex jumps without heavy cost
     const smoothed = new Float32Array(vertexCount);
     const getIndex = (gx,gz) => gz * resolution + gx;
-    for(let pass=0; pass<2; pass++){
-      for(let gz=0; gz<resolution; gz++){
-        for(let gx=0; gx<resolution; gx++){
-          let sum = 0, cnt = 0;
-          for(let oz=-1; oz<=1; oz++){
-            for(let ox=-1; ox<=1; ox++){
-              const nx = gx + ox, nz = gz + oz;
-              if(nx>=0 && nx<resolution && nz>=0 && nz<resolution){
-                sum += heights[getIndex(nx,nz)];
-                cnt++;
-              }
+    for(let gz=0; gz<resolution; gz++){
+      for(let gx=0; gx<resolution; gx++){
+        let sum = 0, cnt = 0;
+        for(let oz=-1; oz<=1; oz++){
+          for(let ox=-1; ox<=1; ox++){
+            const nx = gx + ox, nz = gz + oz;
+            if(nx>=0 && nx<resolution && nz>=0 && nz<resolution){
+              sum += heights[getIndex(nx,nz)];
+              cnt++;
             }
           }
-          smoothed[getIndex(gx,gz)] = sum / cnt;
         }
+        smoothed[getIndex(gx,gz)] = sum / cnt;
       }
-      // swap buffers for next pass
-      for(let i=0;i<vertexCount;i++) heights[i] = smoothed[i];
     }
+    // copy once
+    for(let i=0;i<vertexCount;i++) heights[i] = smoothed[i];
     // apply smoothed heights and compute colors
     const colors = new Float32Array(vertexCount*3);
     for(let i=0;i<vertexCount;i++){
@@ -238,7 +237,8 @@ class ChunkManager {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.position.set(cx*CHUNK_SIZE,0,cz*CHUNK_SIZE);
-    mesh.frustumCulled = true;
+    // keep chunks pickable even when near frustum edges so pointer raycasts are reliable
+    mesh.frustumCulled = false;
     mesh.userData = {cx,cz};
     return mesh;
   }

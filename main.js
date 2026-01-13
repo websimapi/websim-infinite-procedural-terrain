@@ -74,8 +74,9 @@ const RENDER_W = () => canvas.clientWidth;
 const RENDER_H = () => canvas.clientHeight;
 
 const CHUNK_SIZE = 100;     // world units per chunk (square)
-const SEGMENTS = 64;        // per-plane segments (>=64)
+const SEGMENTS = 192;       // per-plane segments (much higher detail - expensive)
 const VERT_SPACING = CHUNK_SIZE / SEGMENTS;
+const PLAYER_RADIUS = 1.8;  // human-sized player radius (meters)
 const VISIBLE_RADIUS = 1;   // chunk radius (1 => 3x3 grid). Use 2 for 5x5 if desired
 const GRID = VISIBLE_RADIUS*2+1;
 const NOISE_SCALE = 0.008;
@@ -121,8 +122,8 @@ function init(){
   dir.castShadow = false; // only sphere shadows for perf
   scene.add(dir);
 
-  // player sphere
-  const sphGeo = new THREE.SphereGeometry(2.2, 32, 24);
+  // player sphere (human-sized)
+  const sphGeo = new THREE.SphereGeometry(PLAYER_RADIUS, 48, 36);
   const sphMat = new THREE.MeshStandardMaterial({color:0xeeeeee, metalness:0.1, roughness:0.7});
   playerSphere = new THREE.Mesh(sphGeo, sphMat);
   playerSphere.castShadow = true;
@@ -130,9 +131,8 @@ function init(){
 
   // add sphere to scene and place it on the terrain (not as a child of a pivot)
   scene.add(playerSphere);
-  const radius = 2.2;
   const h0 = sampleTerrain(0, 0);
-  playerSphere.position.set(0, h0 + radius, 0);
+  playerSphere.position.set(0, h0 + PLAYER_RADIUS, 0);
 
   // chunk manager
   chunkManager = new ChunkManager();
@@ -287,20 +287,20 @@ function onPointerDown(evt){
   const intersects = raycaster.intersectObjects(meshes, true);
   if(intersects.length>0){
     const p = intersects[0].point;
-    targetPos = new THREE.Vector3(p.x, p.y + 2.2, p.z);
+    targetPos = new THREE.Vector3(p.x, p.y + PLAYER_RADIUS, p.z);
   } else {
     // project to ground plane y=0 if nothing
     const planeY = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
     const pt = new THREE.Vector3();
     raycaster.ray.intersectPlane(planeY, pt);
-    if(pt) targetPos = new THREE.Vector3(pt.x, sampleTerrain(pt.x, pt.z)+2.2, pt.z);
+    if(pt) targetPos = new THREE.Vector3(pt.x, sampleTerrain(pt.x, pt.z)+PLAYER_RADIUS, pt.z);
   }
 }
 
 // Sphere rolling: update rotation from movement delta
 function applyRolling(sphere, deltaMove){
   if(deltaMove.lengthSq() < 1e-6) return;
-  const radius = 2.2;
+  const radius = PLAYER_RADIUS;
   const axis = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), deltaMove).normalize();
   const angle = deltaMove.length() / radius;
   const q = new THREE.Quaternion().setFromAxisAngle(axis, angle);
@@ -391,7 +391,7 @@ function animate(){
       // new x,z
       const newX = playerSphere.position.x + move.x;
       const newZ = playerSphere.position.z + move.z;
-      const newY = chunkManager.getHeightAt(newX, newZ) + 2.2;
+      const newY = chunkManager.getHeightAt(newX, newZ) + PLAYER_RADIUS;
       const prev = playerSphere.position.clone();
       playerSphere.position.set(newX, newY, newZ);
       const deltaMove = new THREE.Vector3().subVectors(playerSphere.position, prev);
